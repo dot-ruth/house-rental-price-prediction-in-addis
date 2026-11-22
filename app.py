@@ -5,233 +5,66 @@ import numpy as np
 import joblib
 from pathlib import Path
 
+st.set_page_config(page_title="Addis Ababa Rental Price Predictor", page_icon="")
 
-# --------------------------------------------------
-# PAGE CONFIGURATION
-# --------------------------------------------------
-
-st.set_page_config(
-    page_title="Addis Ababa Rental Price Predictor",
-    page_icon="🏠",
-    layout="centered"
-)
-
-
-# --------------------------------------------------
-# LOAD TRAINED MODEL
-# --------------------------------------------------
-
-MODEL_PATH = (
-    Path(__file__).parent
-    / "models"
-    / "gradient_boosting_rental_price_model.joblib"
-)
-
+MODEL_PATH = Path(__file__).parent / "models" / "gradient_boosting_rental_price_model.joblib"
+DATA_PATH = Path(__file__).parent / "real-estate_dataset_addis-ababa_v1.csv"
 
 @st.cache_resource
 def load_model():
     return joblib.load(MODEL_PATH)
 
+@st.cache_data
+def load_options():
+    df = pd.read_csv(DATA_PATH, low_memory=False)
+    df = df[df["listing_type"].astype("string").str.contains("rent", case=False, na=False)]
+    return {
+        col: sorted(df[col].dropna().astype(str).str.strip().str.lower().unique())
+        for col in ["property_type", "subcity"]
+    }
 
 model = load_model()
+options = load_options()
 
-
-# --------------------------------------------------
-# INPUT PREPARATION
-# Must match the training-time preparation logic
-# --------------------------------------------------
-
-def normalize_property_type(value):
-
-    if pd.isna(value):
-        return np.nan
-
-    value = str(value).strip().lower()
-
-    if "studio" in value:
-        return "Studio Apartment"
-
-    if "apartment" in value and "house" in value:
-        return "Mixed residential"
-
-    if "villa" in value:
-        return "Villa"
-
-    if "penthouse" in value:
-        return "Penthouse"
-
-    if "townhouse" in value or "terrace" in value:
-        return "Townhouse"
-
-    if "duplex" in value:
-        return "Duplex"
-
-    if "mansion" in value:
-        return "Mansion"
-
-    if "condo" in value:
-        return "Condo"
-
-    if "apartment" in value:
-        return "Apartment"
-
-    if "house" in value:
-        return "House"
-
-    if "building" in value:
-        return "Building"
-
-    if "residential" in value:
-        return "Residential"
-
-    return "Other"
-
+categorical_features = ["property_type", "subcity", "condition"]
+numerical_features = ["num_bedrooms", "num_bathrooms"]
 
 def prepare_input(data):
-
-    data["property_type"] = (
-        data["property_type"]
-        .apply(normalize_property_type)
-        .astype(object)
-    )
-
-    for col in ["location", "condition"]:
-        data[col] = (
-            data[col]
-            .astype(object)
-            .where(data[col].notna(), np.nan)
-        )
-
-        data[col] = data[col].apply(
-            lambda value: (
-                str(value).strip().lower()
-                if pd.notna(value)
-                else np.nan
-            )
-        )
-
-    for col in ["bedrooms", "bathrooms"]:
-        data[col] = pd.to_numeric(
-            data[col],
-            errors="coerce"
-        )
-
+    data[categorical_features] = data[categorical_features].apply(
+        lambda col: col.astype("string").str.strip().str.lower()
+    ).astype(object).where(data[categorical_features].notna(), np.nan)
+    data[numerical_features] = data[numerical_features].apply(pd.to_numeric, errors="coerce")
     return data
 
-
-# --------------------------------------------------
-# APPLICATION INTERFACE
-# --------------------------------------------------
-
-st.title("🏠 Addis Ababa Rental Price Predictor")
-
-st.write(
-    """
-    Estimate the monthly rental price of a residential
-    property in Addis Ababa using a machine learning model.
-    """
-)
-
-st.divider()
-
-st.subheader("Property Information")
+st.title("Addis Ababa Rental Price Predictor")
+st.write("Estimate residential rental prices in Addis Ababa using machine learning.")
 
 with st.form("prediction_form"):
-
-    property_type = st.text_input(
-        "Property Type",
-        placeholder="e.g. Apartment, House, Villa"
-    )
-
-    location = st.text_input(
-        "Location",
-        placeholder="e.g. Bole, Addis Ababa"
-    )
-
-    condition = st.selectbox(
-        "Property Condition",
-        [
-            "Newly-Built",
-            "Fairly Used",
-            "Renovated",
-            "Old"
-        ]
-    )
+    property_type = st.selectbox("Property Type", options["property_type"])
+    subcity = st.selectbox("Subcity", options["subcity"])
+    condition = st.selectbox("Property Condition", ["Newly-Built", "Fairly Used", "Renovated", "Old"])
 
     col1, col2 = st.columns(2)
+    bedrooms = col1.number_input("Bedrooms", 0, 30, 2)
+    bathrooms = col2.number_input("Bathrooms", 0, 30, 1)
 
-    with col1:
-        bedrooms = st.number_input(
-            "Bedrooms",
-            min_value=0,
-            max_value=30,
-            value=2,
-            step=1
-        )
-
-    with col2:
-        bathrooms = st.number_input(
-            "Bathrooms",
-            min_value=0,
-            max_value=30,
-            value=1,
-            step=1
-        )
-
-    submitted = st.form_submit_button(
-        "Predict Monthly Rent",
-        use_container_width=True
-    )
-
-
-# --------------------------------------------------
-# PREDICTION
-# --------------------------------------------------
+    submitted = st.form_submit_button("Predict Rental Price", use_container_width=True)
 
 if submitted:
+    data = pd.DataFrame([{
+        "property_type": property_type,
+        "subcity": subcity,
+        "condition": condition,
+        "num_bedrooms": bedrooms,
+        "num_bathrooms": bathrooms
+    }])
 
-    if not property_type.strip() or not location.strip():
-        st.warning(
-            "Please enter both property type and location."
-        )
+    prediction = model.predict(prepare_input(data))[0]
 
-    else:
-
-        input_data = pd.DataFrame([{
-            "property_type": property_type,
-            "location": location,
-            "condition": condition,
-            "bedrooms": bedrooms,
-            "bathrooms": bathrooms
-        }])
-
-        prepared_data = prepare_input(input_data)
-
-        prediction = model.predict(prepared_data)[0]
-
-        st.divider()
-
-        st.subheader("Estimated Monthly Rent")
-
-        st.metric(
-            label="Predicted Rental Price",
-            value=f"ETB {prediction:,.2f}"
-        )
-
-        st.caption(
-            "This is a machine learning estimate, not an "
-            "official property valuation or guaranteed market price."
-        )
-
-        st.info(
-            "Prediction quality depends on the available training "
-            "data and the information provided."
-        )
-
+    st.divider()
+    st.subheader("Estimated Rental Price")
+    st.metric("Predicted Price", f"{prediction:,.2f}")
+    st.caption("This is a machine learning estimate, not a guaranteed market price.")
 
 st.divider()
-
-st.caption(
-    "Machine Learning Assignment | Residential Rental Price "
-    "Prediction in Addis Ababa"
-)
+st.caption("Machine Learning Assignment | Residential Rental Price Prediction in Addis Ababa")
